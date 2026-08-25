@@ -54,16 +54,21 @@ async def start(client, message):
             parse_mode=enums.ParseMode.HTML
         )
         return
-    if AUTH_CHANNEL and not await is_subscribed(client, message):
+    if FSUB_CHANNELS:
+    channel_id = random.choice(FSUB_CHANNELS)
+
+    if not await is_subscribed(client, message, channel_id):
         try:
-            invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL))
+            invite_link = await client.create_chat_invite_link(channel_id)
         except ChatAdminRequired:
             logger.error("Make sure Bot is admin in Forcesub channel")
             return
+
         btn = [
             [
                 InlineKeyboardButton(
-                    "📺 Jᴏɪɴ Cʜᴀɴɴᴇʟ 📺", url=invite_link.invite_link
+                    "📺 Jᴏɪɴ Cʜᴀɴɴᴇʟ 📺",
+                    url=invite_link.invite_link
                 )
             ]
         ]
@@ -71,17 +76,29 @@ async def start(client, message):
         if message.command[1] != "subscribe":
             try:
                 kk, file_id = message.command[1].split("_", 1)
-                pre = 'checksubp' if kk == 'filep' else 'checksub' 
-                btn.append([InlineKeyboardButton("🔁 Tʀʏ Aɢᴀɪɴ 🔁", callback_data=f"{pre}#{file_id}")])
+                pre = 'checksubp' if kk == 'filep' else 'checksub'
+
+                btn.append([
+                    InlineKeyboardButton(
+                        "🔁 Tʀʏ Aɢᴀɪɴ 🔁",
+                        callback_data=f"{pre}#{channel_id}#{file_id}"
+                    )
+                ])
             except (IndexError, ValueError):
-                btn.append([InlineKeyboardButton("🔁 Tʀʏ Aɢᴀɪɴ 🔁", url=f"https://t.me/{temp.U_NAME}?start={message.command[1]}")])
+                btn.append([
+                    InlineKeyboardButton(
+                        "🔁 Tʀʏ Aɢᴀɪɴ 🔁",
+                        url=f"https://t.me/{temp.U_NAME}?start={message.command[1]}"
+                    )
+                ])
+
         await client.send_photo(
             chat_id=message.from_user.id,
             photo=FORCE_IMG,
-            caption="**താഴെ ഉള്ള 𝗝𝗼𝗶𝗻 𝗖𝗵𝗮𝗻𝗻𝗲𝗹 ക്ലിക്ക് ചെയ്ത് കഴിഞ്ഞ് 𝗧𝗿𝘆 𝗔𝗴𝗮𝗶𝗻 ക്ലിക്ക് ചെയ്‌താൽ നിങ്ങൾക് സിനിമ ലഭിക്കുന്നതാണ്.!\n\nClick the 𝗝𝗼𝗶𝗻 𝗖𝗵𝗮𝗻𝗻𝗲𝗹 and then click 𝗧𝗿𝘆 𝗔𝗴𝗮𝗶𝗻 and you will get the File.!**",
+            caption="**താഴെ ഉള്ള 𝗝𝗼𝗶𝗻 𝗖𝗵𝗮𝗻𝗻𝗲𝗹 ക്ലിക്ക് ചെയ്ത് കഴിഞ്ഞ് 𝗧𝗿𝘆 𝗔𝗴𝗮𝗶𝗻 ക്ലിക്ക് ചെയ്‌താൽ നിങ്ങൾക് സിനിമ ലഭിക്കുന്നതാണ്.!**\n\n**Click the 𝗝𝗼𝗶𝗻 𝗖𝗵𝗮𝗻𝗻𝗲𝗹 and then click 𝗧𝗿𝘆 𝗔𝗴ᴀɪɴ and you will get the File.!**",
             reply_markup=InlineKeyboardMarkup(btn),
             parse_mode=enums.ParseMode.MARKDOWN
-            )
+        )
         return
     if len(message.command) == 2 and message.command[1] in ["subscribe", "error", "okay", "help"]:
         buttons = [[
