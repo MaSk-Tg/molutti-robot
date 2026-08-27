@@ -356,33 +356,34 @@ async def cb_handler(client: Client, query: CallbackQuery):
             alert = alert.replace("\\n", "\n").replace("\\t", "\t")
             await query.answer(alert, show_alert=True)
     if query.data.startswith("file"):
-        ident, file_id = query.data.split("#")
-        files_ = await get_file_details(file_id)
-        if not files_:
-            return await query.answer( 'No such file exist😔. ')
-        files = files_[0]
-        title = files.file_name
-        size = get_size(files.file_size)
-        f_caption = files.caption
-        settings = await get_settings(query.message.chat.id)
-        if CUSTOM_FILE_CAPTION:
-    try:
-        language, resolution, subtitles, duration = get_media_info(files)
+    ident, file_id = query.data.split("#")
+    files_ = await get_file_details(file_id)
+    if not files_:
+        return await query.answer('No such file exist😔. ')
+    files = files_[0]
+    title = files.file_name
+    size = get_size(files.file_size)
+    f_caption = files.caption
+    settings = await get_settings(query.message.chat.id)
 
-        f_caption = CUSTOM_FILE_CAPTION.format(
-            file_name='' if title is None else title,
-            file_size='' if size is None else size,
-            file_caption='' if f_caption is None else f_caption,
-            language=language,
-            resolution=resolution,
-            subtitles=subtitles,
-            duration=duration
-        )
-    except Exception as e:
-        logger.exception(e)
+    if CUSTOM_FILE_CAPTION:
+        try:
+            language, resolution, subtitles, duration = get_media_info(files)
 
-if f_caption is None:
-    f_caption = f"{files.file_name}"
+            f_caption = CUSTOM_FILE_CAPTION.format(
+                file_name='' if title is None else title,
+                file_size='' if size is None else size,
+                file_caption='' if f_caption is None else f_caption,
+                language=language,
+                resolution=resolution,
+                subtitles=subtitles,
+                duration=duration
+            )
+        except Exception as e:
+            logger.exception(e)
+
+    if f_caption is None:
+        f_caption = f"{files.file_name}"
 
         try:
             if AUTH_CHANNEL and not await is_subscribed(client, query):
