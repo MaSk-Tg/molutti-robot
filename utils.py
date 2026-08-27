@@ -214,6 +214,66 @@ def get_file_id(msg: Message):
                 setattr(obj, "message_type", message_type)
                 return obj
 
+def get_media_info(media):
+    language = "Unknown"
+    resolution = "Unknown"
+    subtitles = "Unknown"
+    duration = "Unknown"
+
+    # Video information
+    if getattr(media, "message_type", None) == "video":
+        width = getattr(media, "width", None)
+        height = getattr(media, "height", None)
+        video_duration = getattr(media, "duration", None)
+
+        if width and height:
+            resolution = f"{width}x{height}"
+
+        if video_duration:
+            seconds = int(video_duration)
+            hours, remainder = divmod(seconds, 3600)
+            minutes, seconds = divmod(remainder, 60)
+
+            if hours:
+                duration = f"{hours}h {minutes}m {seconds}s"
+            elif minutes:
+                duration = f"{minutes}m {seconds}s"
+            else:
+                duration = f"{seconds}s"
+
+    # Get filename + caption
+    file_name = getattr(media, "file_name", "") or ""
+    caption = getattr(media, "caption", "") or ""
+    text = f"{file_name} {caption}"
+
+    # Detect languages
+    langs = [
+        "Tamil",
+        "Telugu",
+        "Hindi",
+        "Malayalam",
+        "Kannada",
+        "English"
+    ]
+
+    found_langs = [
+        lang for lang in langs
+        if re.search(rf"\b{lang}\b", text, re.IGNORECASE)
+    ]
+
+    if found_langs:
+        language = ", ".join(found_langs)
+
+    # Detect subtitles
+    if re.search(
+        r"\b(ESub|ESubs|English\s*Sub(?:title)?s?)\b",
+        text,
+        re.IGNORECASE
+    ):
+        subtitles = "English"
+
+    return language, resolution, subtitles, duration
+
 def extract_user(message: Message) -> Union[int, str]:
     """extracts the user from a message"""
     # https://github.com/SpEcHiDe/PyroGramBot/blob/f30e2cca12002121bad1982f68cd0ff9814ce027/pyrobot/helper_functions/extract_user.py#L7
