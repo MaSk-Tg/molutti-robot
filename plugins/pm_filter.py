@@ -366,15 +366,23 @@ async def cb_handler(client: Client, query: CallbackQuery):
         f_caption = files.caption
         settings = await get_settings(query.message.chat.id)
         if CUSTOM_FILE_CAPTION:
-            try:
-                f_caption = CUSTOM_FILE_CAPTION.format(file_name='' if title is None else title,
-                                                       file_size='' if size is None else size,
-                                                       file_caption='' if f_caption is None else f_caption)
-            except Exception as e:
-                logger.exception(e)
-            f_caption = f_caption
-        if f_caption is None:
-            f_caption = f"{files.file_name}"
+    try:
+        language, resolution, subtitles, duration = get_media_info(files)
+
+        f_caption = CUSTOM_FILE_CAPTION.format(
+            file_name='' if title is None else title,
+            file_size='' if size is None else size,
+            file_caption='' if f_caption is None else f_caption,
+            language=language,
+            resolution=resolution,
+            subtitles=subtitles,
+            duration=duration
+        )
+    except Exception as e:
+        logger.exception(e)
+
+if f_caption is None:
+    f_caption = f"{files.file_name}"
 
         try:
             if AUTH_CHANNEL and not await is_subscribed(client, query):
