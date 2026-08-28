@@ -9,7 +9,11 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.ERROR)
 
 
-@Client.on_message((filters.private | filters.group) & filters.command('connect') & filters.user(ADMINS))
+@Client.on_message(
+    (filters.private | filters.group)
+    & filters.command("connect")
+    & filters.user(ADMINS)
+)
 async def addconnection(client, message):
     userid = message.from_user.id if message.from_user else None
     if not userid:
@@ -17,41 +21,55 @@ async def addconnection(client, message):
             f"You are anonymous admin. Use /connect {message.chat.id} in PM"
         )
 
-    chat_type = message.chat.type
+    # Resolve the target group ID from the command argument first.
+    # This makes PM usage reliable regardless of Pyrogram ChatType formatting.
     group_id = None
+    raw_text = (message.text or message.caption or "").strip()
+    candidates = []
 
-    # When /connect is used in PM, the group id must be supplied.
-    # message.command also handles /connect@BotUsername correctly.
-    if chat_type == "private":
-        try:
-            raw_text = (message.text or message.caption or "").strip()
-            match = re.match(
-                r"^/connect(?:@[A-Za-z0-9_]+)?\s+(-?\d+)\s*$",
-                raw_text,
-                re.IGNORECASE,
-            )
-            if not match:
-                raise ValueError("missing or invalid group id")
-            group_id = int(match.group(1))
-        except (ValueError, TypeError, IndexError):
+    try:
+        command = getattr(message, "command", None) or []
+        candidates.extend(str(x).strip() for x in command[1:])
+    except Exception:
+        pass
+
+    # Raw-text fallback: supports /connect -1001234567890
+    candidates.extend(re.findall(r"-100\d{5,}", raw_text))
+    candidates.extend(re.findall(r"(?<!\d)-\d{5,}", raw_text))
+
+    for candidate in candidates:
+        if re.fullmatch(r"-\d{5,}", candidate):
+            try:
+                group_id = str(int(candidate))
+                break
+            except (TypeError, ValueError):
+                continue
+
+    # If the command was sent directly inside a group, use that chat ID.
+    if group_id is None:
+        chat_type = str(message.chat.type).lower()
+        if "group" in chat_type:
+            group_id = str(message.chat.id)
+
+    if group_id is None:
             await message.reply_text(
-                "<b>Enter in correct format!</b>\n\n"
-                "<code>/connect groupid</code>\n\n"
-                "<i>Get your Group id by adding this bot to your group and use "
-                "<code>/id</code></i>",
-                quote=True
+                "<b>❌ Group ID not found.</b>\n\n"
+                "Use:\n"
+                "<code>/connect -1001234567890</code>\n\n"
+                "Or run <code>/connect</code> inside the group.",
+                quote=True,
             )
             return
 
-    elif chat_type in ["group", "supergroup"]:
+    elif chat_type in ("group", "supergroup"):
         group_id = str(message.chat.id)
 
-    # Safety guard: never use an unassigned group_id.
-    if not group_id:
+    if group_id is None:
         await message.reply_text(
-            "Unable to determine the group ID. Use /connect groupid in PM "
-            "or run /connect inside the group.",
-            quote=True
+            "<b>❌ Unable to determine the group ID.</b>\n\n"
+            "Use <code>/connect -1001234567890</code> in PM "
+            "or run <code>/connect</code> inside the group.",
+            quote=True,
         )
         return
 
@@ -64,7 +82,7 @@ async def addconnection(client, message):
         ):
             await message.reply_text(
                 "You should be an admin in Given group!",
-                quote=True
+                quote=True,
             )
             return
     except Exception as e:
@@ -88,30 +106,30 @@ async def addconnection(client, message):
                     f"Successfully connected to **{title}**\n"
                     "Now manage your group from my pm !",
                     quote=True,
-                    parse_mode="md"
+                    parse_mode="md",
                 )
 
-                if chat_type in ["group", "supergroup"]:
+                if chat_type in ("group", "supergroup"):
                     await client.send_message(
                         userid,
                         f"Connected to **{title}** !",
-                        parse_mode="md"
+                        parse_mode="md",
                     )
             else:
                 await message.reply_text(
                     "You're already connected to this chat!",
-                    quote=True
+                    quote=True,
                 )
         else:
             await message.reply_text(
                 "Add me as an admin in group",
-                quote=True
+                quote=True,
             )
     except Exception as e:
         logger.exception(e)
         await message.reply_text(
             "Some error occurred! Try again later.",
-            quote=True
+            quote=True,
         )
         return
 
