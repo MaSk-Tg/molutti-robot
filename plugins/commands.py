@@ -9,7 +9,7 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from database.ia_filterdb import Media, get_file_details, unpack_new_file_id
 from database.users_chats_db import db
 from info import CHANNELS, ADMINS, AUTH_CHANNEL, LOG_CHANNEL, PICS, BATCH_FILE_CAPTION, CUSTOM_FILE_CAPTION, PROTECT_CONTENT, FORCE_IMG
-from utils import get_settings, get_size, is_subscribed, save_group_settings, temp
+from utils import get_settings, get_size, is_subscribed, save_group_settings, temp, get_media_info
 from database.connections_mdb import active_connection
 import re
 import json
@@ -212,9 +212,19 @@ async def start(client, message):
             f_caption = f"<code>{title}</code>"
             if CUSTOM_FILE_CAPTION:
                 try:
-                    f_caption=CUSTOM_FILE_CAPTION.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_caption='')
-                except:
-                    return
+                    language, resolution, subtitles, duration = await get_media_info(file, client)
+                    f_caption=CUSTOM_FILE_CAPTION.format(
+                        file_name='' if title is None else title,
+                        file_size='' if size is None else size,
+                        file_caption='',
+                        language=language,
+                        resolution=resolution,
+                        subtitles=subtitles,
+                        duration=duration
+                    )
+                except Exception as e:
+                    logger.exception(e)
+                    f_caption=f_caption
             await msg.edit_caption(f_caption)
             return
         except:
@@ -226,7 +236,16 @@ async def start(client, message):
     f_caption=files.caption
     if CUSTOM_FILE_CAPTION:
         try:
-            f_caption=CUSTOM_FILE_CAPTION.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_caption='' if f_caption is None else f_caption)
+            language, resolution, subtitles, duration = await get_media_info(files, client)
+            f_caption=CUSTOM_FILE_CAPTION.format(
+                file_name='' if title is None else title,
+                file_size='' if size is None else size,
+                file_caption='' if f_caption is None else f_caption,
+                language=language,
+                resolution=resolution,
+                subtitles=subtitles,
+                duration=duration
+            )
         except Exception as e:
             logger.exception(e)
             f_caption=f_caption
