@@ -1,40 +1,17 @@
 from pyrogram import filters, Client
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from database.connections_mdb import add_connection, all_connections, if_active, delete_connection
+from database.connections_mdb import (
+    add_connection,
+    all_connections,
+    if_active,
+    delete_connection,
+)
 from info import ADMINS
 import logging
 import re
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.ERROR)
-
-
-def _get_group_id_from_command(message):
-    """Return a target group ID from /connect, or None if not supplied."""
-    # Pyrogram normally exposes command arguments here:
-    # ['/connect', '-1001234567890']
-    try:
-        command = getattr(message, "command", None) or []
-        for arg in command[1:]:
-            value = str(arg).strip()
-            if re.fullmatch(r"-\d{5,}", value):
-                return int(value)
-    except Exception:
-        pass
-
-    # Fallback for messages where .command is unavailable.
-    raw_text = (getattr(message, "text", None)
-                or getattr(message, "caption", None)
-                or "").strip()
-
-    match = re.search(r"(?<!\d)-\d{5,}(?!\d)", raw_text)
-    if match:
-        try:
-            return int(match.group(0))
-        except (TypeError, ValueError):
-            pass
-
-    return None
 
 
 @Client.on_message(
@@ -44,97 +21,118 @@ def _get_group_id_from_command(message):
 )
 async def addconnection(client, message):
     userid = message.from_user.id if message.from_user else None
-
     if not userid:
-        return await message.reply_text(
-            f"You are anonymous admin. Use /connect {message.chat.id} in PM",
-            quote=True,
+        return await message.reply(
+            f"You are anonymous admin. Use /connect {message.chat.id} in PM"
         )
 
-    # IMPORTANT: initialize chat_type before any branch uses it.
     chat_type = str(message.chat.type).lower()
+    group_id = None
 
-    # In a group/supergroup, /connect means connect THIS group.
-    if chat_type in ("group", "supergroup"):
-        group_id = int(message.chat.id)
+    # /connect <group_id> in PM
+    if chat_type == "private":
+        raw_text = (message.text or message.caption or "").strip()
+
+        # Pyrogram normally puts arguments in message.command.
+        candidates = []
+        command = getattr(message, "command", None)
+        if command:
+            candidates.extend(str(item).strip() for item in command[1:])
+
+        # Fallback for raw text, including /connect@BotUsername -100...
+        candidates.extend(re.findall(r"-100\d{5,}", raw_text))
+        candidates.extend(re.findall(r"(?<!\d)-\d{5,}", raw_text))
+
+        for candidate in candidates:
+            if re.fullmatch(r"-\d{5,}", candidate):
+                try:
+                    value = int(candidate)
+                except (TypeError, ValueError):
+                    continue
+                if value < 0:
+                    group_id = value
+                    break
+
+        if group_id is None:
+            await message.reply_text(
+                "<b>❌ Enter the Group ID correctly.</b>\n\n"
+                "Use:\n"
+                "<code>/connect -1001234567890</code>\n\n"
+                "The bot must already be present in that group.\n"
+                "Or run <code>/connect</code> directly inside the group.",
+                quote=True,
+            )
+            return
+
+    # /connect directly inside a group/supergroup
+    elif "group" in chat_type:
+        group_id = message.chat.id
+
     else:
-        # In PM, /connect must contain the target group ID.
-        group_id = _get_group_id_from_command(message)
-
-    if group_id is None:
         await message.reply_text(
-            "<b>âŒ Unable to determine the group ID.</b>\n\n"
-            "In PM use:\n"
-            "<code>/connect -1001234567890</code>\n\n"
-            "Or run <code>/connect</code> inside the group.",
+            "<b>❌ Unable to determine the group ID.</b>\n\n"
+            "Use <code>/connect -1001234567890</code> in PM "
+            "or run <code>/connect</code> inside the group.",
             quote=True,
         )
         return
 
-    # Verify that the requesting admin is an admin of the target group.
     try:
-        st = await client.get_chat_member(group_id, userid)
-
-        if (
-            st.status not in ("administrator", "creator")
-            and userid not in ADMINS
-        ):
+        # Verify that the requesting user is an admin of the target group.
+        st = await client.get_chat_member(int(group_id), userid)
+        if st.status not in ("administrator", "creator") and userid not in ADMINS:
             await message.reply_text(
-                "You should be an admin in Given group!",
+                "You should be an admin in the given group!",
                 quote=True,
             )
             return
-
     except Exception as e:
-        logger.exception("Failed to verify target group/admin: %s", e)
+        logger.exception("Unable to verify group/user: %s", e)
         await message.reply_text(
-            "Invalid Group ID!\n\n"
-            "If the ID is correct, make sure I'm present in your group.",
+            "❌ Invalid Group ID!\n\n"
+            "If the ID is correct, make sure the bot and you are present in the group.",
             quote=True,
         )
         return
 
-    # Verify that the bot itself is an administrator in the target group.
     try:
-        bot_member = await client.get_chat_member(group_id, "me")
-
-        if bot_member.status != "administrator":
+        # The bot itself must be an administrator in the target group.
+        bot_member = await client.get_chat_member(int(group_id), "me")
+        if bot_member.status not in ("administrator", "creator"):
             await message.reply_text(
-                "Add me as an admin in group",
+                "❌ Please add me as an admin in the group first.",
                 quote=True,
             )
             return
 
-        chat = await client.get_chat(group_id)
-        title = chat.title or str(group_id)
+        chat = await client.get_chat(int(group_id))
+        title = chat.title or "this group"
 
         addcon = await add_connection(str(group_id), str(userid))
-
-        if addcon:
-            await message.reply_text(
-                f"Successfully connected to **{title}**\n"
-                "Now manage your group from my pm !",
-                quote=True,
-                parse_mode="md",
-            )
-
-            # If /connect was run inside the group, also notify the admin in PM.
-            if chat_type in ("group", "supergroup"):
-                try:
-                    await client.send_message(
-                        userid,
-                        f"Connected to **{title}** !",
-                        parse_mode="md",
-                    )
-                except Exception as e:
-                    logger.exception(
-                        "Could not send connection confirmation to PM: %s", e
-                    )
-        else:
+        if not addcon:
             await message.reply_text(
                 "You're already connected to this chat!",
                 quote=True,
             )
+            return
+
+        await message.reply_text(
+            f"Successfully connected to **{title}**\n"
+            "Now manage your group from my PM!",
+            quote=True,
+            parse_mode="md",
+        )
+
+        # When /connect was run inside the group, also notify the admin in PM.
+        if "group" in chat_type:
+            try:
+                await client.send_message(
+                    userid,
+                    f"Connected to **{title}**!",
+                    parse_mode="md",
+                )
+            except Exception as e:
+                logger.exception("Unable to send PM confirmation: %s", e)
 
     except Exception as e:
         logger.exception("Connection error: %s", e)
@@ -151,11 +149,9 @@ async def addconnection(client, message):
 )
 async def deleteconnection(client, message):
     userid = message.from_user.id if message.from_user else None
-
     if not userid:
-        return await message.reply_text(
-            f"You are anonymous admin. Use /connect {message.chat.id} in PM",
-            quote=True,
+        return await message.reply(
+            f"You are anonymous admin. Use /connect {message.chat.id} in PM"
         )
 
     chat_type = str(message.chat.type).lower()
@@ -167,48 +163,36 @@ async def deleteconnection(client, message):
         )
         return
 
-    if chat_type in ("group", "supergroup"):
+    if "group" in chat_type:
         group_id = message.chat.id
 
         try:
             st = await client.get_chat_member(group_id, userid)
-            if (
-                st.status not in ("administrator", "creator")
-                and userid not in ADMINS
-            ):
+            if st.status not in ("administrator", "creator") and userid not in ADMINS:
                 return
+        except Exception:
+            return
 
-            delcon = await delete_connection(str(userid), str(group_id))
-
-            if delcon:
-                await message.reply_text(
-                    "Successfully disconnected from this chat",
-                    quote=True,
-                )
-            else:
-                await message.reply_text(
-                    "This chat isn't connected to me!\n"
-                    "Do /connect to connect.",
-                    quote=True,
-                )
-        except Exception as e:
-            logger.exception("Disconnect error: %s", e)
+        delcon = await delete_connection(str(userid), str(group_id))
+        if delcon:
             await message.reply_text(
-                "Some error occurred! Try again later.",
+                "Successfully disconnected from this chat",
+                quote=True,
+            )
+        else:
+            await message.reply_text(
+                "This chat isn't connected to me!\nDo /connect to connect.",
                 quote=True,
             )
 
 
 @Client.on_message(
-    filters.private
-    & filters.command("connections")
-    & filters.user(ADMINS)
+    filters.private & filters.command(["connections"]) & filters.user(ADMINS)
 )
 async def connections(client, message):
     userid = message.from_user.id
 
     groupids = await all_connections(str(userid))
-
     if groupids is None:
         await message.reply_text(
             "There are no active connections!! Connect to some groups first.",
@@ -217,14 +201,12 @@ async def connections(client, message):
         return
 
     buttons = []
-
     for groupid in groupids:
         try:
             ttl = await client.get_chat(int(groupid))
             title = ttl.title
             active = await if_active(str(userid), str(groupid))
             act = " - ACTIVE" if active else ""
-
             buttons.append(
                 [
                     InlineKeyboardButton(
@@ -234,7 +216,7 @@ async def connections(client, message):
                 ]
             )
         except Exception:
-            logger.exception("Failed to load connected group %s", groupid)
+            pass
 
     if buttons:
         await message.reply_text(
