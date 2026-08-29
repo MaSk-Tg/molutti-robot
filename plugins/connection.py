@@ -15,12 +15,7 @@ logger.setLevel(logging.ERROR)
 
 
 def _chat_type(message):
-    """Return Pyrogram chat type as a plain lowercase string.
-
-    Pyrogram/Pyrofork may expose Chat.type as an enum (for example
-    ChatType.PRIVATE). Using .value when available avoids comparing an
-    enum's string representation with plain strings.
-    """
+    """Return Pyrogram/Pyrofork chat type as a plain lowercase string."""
     chat = getattr(message, "chat", None)
     value = getattr(getattr(chat, "type", None), "value", None)
     if value is None:
@@ -28,11 +23,19 @@ def _chat_type(message):
     return str(value).lower().split(".")[-1]
 
 
+def _status_name(member):
+    """Normalize Pyrogram/Pyrofork ChatMember.status to a plain string."""
+    status = getattr(member, "status", None)
+    value = getattr(status, "value", None)
+    if value is not None:
+        status = value
+    return str(status).lower().split(".")[-1]
+
+
 def _extract_group_id(message):
     """Extract a negative Telegram group/supergroup ID from /connect args."""
     command = getattr(message, "command", None) or []
 
-    # In Pyrogram this is normally: ['/connect', '-1001234567890'].
     for item in command[1:]:
         token = str(item).strip()
         if re.fullmatch(r"-\d{5,}", token):
@@ -43,8 +46,12 @@ def _extract_group_id(message):
             if value < 0:
                 return value
 
-    # Fallback for unusual clients/raw command parsing.
-    raw_text = (getattr(message, "text", None) or getattr(message, "caption", None) or "").strip()
+    raw_text = (
+        getattr(message, "text", None)
+        or getattr(message, "caption", None)
+        or ""
+    ).strip()
+
     match = re.search(r"(?<!\d)-\d{5,}(?!\d)", raw_text)
     if match:
         try:
@@ -55,6 +62,19 @@ def _extract_group_id(message):
             pass
 
     return None
+
+
+async def _get_bot_id(client):
+    """Get the actual bot user ID; avoids relying on the special 'me' peer."""
+    try:
+        me = getattr(client, "me", None)
+        if me and getattr(me, "id", None):
+            return me.id
+    except Exception:
+        pass
+
+    me = await client.get_me()
+    return me.id
 
 
 @Client.on_message(
@@ -83,7 +103,7 @@ async def addconnection(client, message):
                 quote=True,
             )
 
-    # Group/supergroup: /connect (no ID needed)
+    # Group/supergroup: /connect (no ID required)
     elif chat_type in ("group", "supergroup"):
         group_id = message.chat.id
 
@@ -95,32 +115,53 @@ async def addconnection(client, message):
             quote=True,
         )
 
+    group_id = int(group_id)
+
+    # Check that the requesting admin can access the target group.
     try:
-        # Verify the requesting user has access to the target group.
-        st = await client.get_chat_member(int(group_id), userid)
-        if st.status not in ("administrator", "creator") and userid not in ADMINS:
+        st = await client.get_chat_member(group_id, userid)
+        user_status = _status_name(st)
+
+        if user_status not in ("administrator", "creator") and userid not in ADMINS:
             return await message.reply_text(
-                "You should be an admin in the given group!",
+                "❌ You should be an admin in the given group!",
                 quote=True,
             )
     except Exception as e:
-        logger.exception("Unable to verify requesting user for group %s: %s", group_id, e)
+        logger.exception(
+            "Unable to verify requesting user %s in group %s: %s",
+            userid, group_id, e
+        )
         return await message.reply_text(
             "❌ Invalid Group ID!\n\n"
-            "If the ID is correct, make sure the bot and you are present in the group.",
+            "Make sure the group ID is correct and the bot is present in the group.",
             quote=True,
         )
 
+    # Verify the bot itself using its real numeric user ID.
     try:
-        # The bot must be present in the target group and be an administrator.
-        bot_member = await client.get_chat_member(int(group_id), "me")
-        if bot_member.status not in ("administrator", "creator"):
+        bot_id = await _get_bot_id(client)
+        bot_member = await client.get_chat_member(group_id, bot_id)
+        bot_status = _status_name(bot_member)
+
+        if bot_status not in ("administrator", "creator"):
             return await message.reply_text(
                 "❌ Please add me as an admin in the group first.",
                 quote=True,
             )
+    except Exception as e:
+        logger.exception(
+            "Unable to verify bot membership for group %s: %s",
+            group_id, e
+        )
+        return await message.reply_text(
+            "❌ I can't verify my membership in this group.\n\n"
+            "Please make sure the bot is in the group and has admin rights.",
+            quote=True,
+        )
 
-        chat = await client.get_chat(int(group_id))
+    try:
+        chat = await client.get_chat(group_id)
         title = chat.title or "this group"
 
         connected = await add_connection(str(group_id), str(userid))
@@ -136,7 +177,7 @@ async def addconnection(client, message):
             quote=True,
         )
 
-        # If /connect was run in the group, also send confirmation to PM.
+        # If /connect was run in the group, send a PM confirmation too.
         if chat_type in ("group", "supergroup"):
             try:
                 await client.send_message(
@@ -144,12 +185,18 @@ async def addconnection(client, message):
                     f"<b>✅ Connected to {title}!</b>",
                 )
             except Exception as e:
-                logger.exception("Unable to send PM confirmation: %s", e)
+                logger.exception(
+                    "Unable to send PM confirmation to %s: %s",
+                    userid, e
+                )
 
     except Exception as e:
-        logger.exception("Connection error for group %s: %s", group_id, e)
+        logger.exception(
+            "Connection error for group %s: %s",
+            group_id, e
+        )
         await message.reply_text(
-            "Some error occurred! Try again later.",
+            "❌ Some error occurred while connecting this group. Try again later.",
             quote=True,
         )
 
@@ -179,7 +226,7 @@ async def deleteconnection(client, message):
 
         try:
             st = await client.get_chat_member(group_id, userid)
-            if st.status not in ("administrator", "creator") and userid not in ADMINS:
+            if _status_name(st) not in ("administrator", "creator") and userid not in ADMINS:
                 return
         except Exception:
             return
@@ -217,6 +264,7 @@ async def connections(client, message):
             title = ttl.title or str(groupid)
             active = await if_active(str(userid), str(groupid))
             act = " - ACTIVE" if active else ""
+
             buttons.append(
                 [
                     InlineKeyboardButton(
@@ -226,7 +274,10 @@ async def connections(client, message):
                 ]
             )
         except Exception:
-            logger.exception("Unable to load connected group %s", groupid)
+            logger.exception(
+                "Unable to load connected group %s",
+                groupid
+            )
 
     if buttons:
         await message.reply_text(
@@ -239,3 +290,4 @@ async def connections(client, message):
             "There are no active connections!! Connect to some groups first.",
             quote=True,
         )
+
