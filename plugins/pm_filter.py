@@ -401,39 +401,11 @@ async def cb_handler(client: Client, query: CallbackQuery):
                 )
                 return
             elif settings.get('botpm', False):
-                # Bot PM mode: send the selected file directly to the user's PM.
-                # This avoids relying on the /start deep-link handler. If the user
-                # has not started the bot yet, fall back to the deep-link.
-                try:
-                    await client.send_cached_media(
-                        chat_id=query.from_user.id,
-                        file_id=file_id,
-                        caption=f_caption,
-                        protect_content=True if ident == "filep" else False,
-                        reply_markup=InlineKeyboardMarkup([
-                            [
-                                InlineKeyboardButton(
-                                    '💥 Gʀᴏᴜᴩ',
-                                    url="https://t.me/+iEbhY7mM4oE1OTVl"
-                                ),
-                                InlineKeyboardButton(
-                                    'Dᴇʟᴇᴛᴇ ⚠️',
-                                    callback_data='close_data'
-                                )
-                            ],
-                            [
-                                InlineKeyboardButton(
-                                    text=f'⚙️ Fɪʟᴇ Sɪᴢᴇ 【 {size} 】⚙️',
-                                    callback_data='gxneo'
-                                )
-                            ]
-                        ])
-                    )
-                    await query.answer('📩 File sent to your PM. Check private chat.', show_alert=True)
-                except (UserIsBlocked, PeerIdInvalid):
-                    await query.answer(
-                        url=f"https://t.me/{temp.U_NAME}?start={ident}_{file_id}"
-                    )
+                # Bot PM ON: open the bot's private chat with a deep-link.
+                # The file is delivered only after the user presses START.
+                await query.answer(
+                    url=f"https://t.me/{temp.U_NAME}?start={ident}_{file_id}"
+                )
                 return
             else:
                 await client.send_cached_media(
