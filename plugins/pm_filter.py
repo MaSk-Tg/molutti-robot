@@ -374,24 +374,11 @@ async def cb_handler(client: Client, query: CallbackQuery):
         title = files.file_name
         size = get_size(files.file_size)
         f_caption = files.caption
-        settings = await get_settings(query.message.chat.id)
-
-        # Handle redirects before slow metadata extraction.
-        if AUTH_CHANNEL and not await is_subscribed(client, query):
-            return await query.answer(
-                url=f"https://t.me/{temp.U_NAME}?start={ident}_{file_id}"
-            )
-        elif settings['botpm']:
-            return await query.answer(
-                url=f"https://t.me/{temp.U_NAME}?start={ident}_{file_id}"
-            )
-
-        # Acknowledge the callback before ffprobe/metadata work.
-        await query.answer('Preparing your file...')
+        settings = await get_settings(query.message.chat.id) or {}
 
         if CUSTOM_FILE_CAPTION:
             try:
-                language, resolution, subtitles, duration = await get_media_info(files, client)
+                language, resolution, subtitles, duration = get_media_info(files)
                 f_caption = CUSTOM_FILE_CAPTION.format(
                     file_name='' if title is None else title,
                     file_size='' if size is None else size,
@@ -408,7 +395,48 @@ async def cb_handler(client: Client, query: CallbackQuery):
             f_caption = f"{files.file_name}"
 
         try:
-            await client.send_cached_media(
+            if AUTH_CHANNEL and not await is_subscribed(client, query):
+                await query.answer(
+                    url=f"https://t.me/{temp.U_NAME}?start={ident}_{file_id}"
+                )
+                return
+            elif settings.get('botpm', False):
+                # Bot PM mode: send the selected file directly to the user's PM.
+                # This avoids relying on the /start deep-link handler. If the user
+                # has not started the bot yet, fall back to the deep-link.
+                try:
+                    await client.send_cached_media(
+                        chat_id=query.from_user.id,
+                        file_id=file_id,
+                        caption=f_caption,
+                        protect_content=True if ident == "filep" else False,
+                        reply_markup=InlineKeyboardMarkup([
+                            [
+                                InlineKeyboardButton(
+                                    '💥 Gʀᴏᴜᴩ',
+                                    url="https://t.me/+iEbhY7mM4oE1OTVl"
+                                ),
+                                InlineKeyboardButton(
+                                    'Dᴇʟᴇᴛᴇ ⚠️',
+                                    callback_data='close_data'
+                                )
+                            ],
+                            [
+                                InlineKeyboardButton(
+                                    text=f'⚙️ Fɪʟᴇ Sɪᴢᴇ 【 {size} 】⚙️',
+                                    callback_data='gxneo'
+                                )
+                            ]
+                        ])
+                    )
+                    await query.answer('📩 File sent to your PM. Check private chat.', show_alert=True)
+                except (UserIsBlocked, PeerIdInvalid):
+                    await query.answer(
+                        url=f"https://t.me/{temp.U_NAME}?start={ident}_{file_id}"
+                    )
+                return
+            else:
+                await client.send_cached_media(
                     chat_id=query.from_user.id,
                     file_id=file_id,
                     caption=f_caption,
@@ -432,12 +460,13 @@ async def cb_handler(client: Client, query: CallbackQuery):
                         ]
                     ])
                 )
+                await query.answer('Check PM, I have sent files in pm', show_alert=True)
         except UserIsBlocked:
-            logger.warning("User %s has blocked the bot", query.from_user.id)
+            await query.answer('Unblock the bot mahn !', show_alert=True)
         except PeerIdInvalid:
-            logger.warning("Invalid peer while sending file %s to %s", file_id, query.from_user.id)
-        except Exception:
-            logger.exception("Failed to send file %s", file_id)
+            await query.answer(url=f"https://t.me/{temp.U_NAME}?start={ident}_{file_id}")
+        except Exception as e:
+            await query.answer(url=f"https://t.me/{temp.U_NAME}?start={ident}_{file_id}")
 
     elif query.data.startswith("checksub"):
         if AUTH_CHANNEL and not await is_subscribed(client, query):
@@ -458,12 +487,9 @@ async def cb_handler(client: Client, query: CallbackQuery):
         size = get_size(files.file_size)
         f_caption = files.caption
 
-        # Acknowledge before metadata extraction to avoid expired callback IDs.
-        await query.answer('Preparing your file...')
-
         if CUSTOM_FILE_CAPTION:
             try:
-                language, resolution, subtitles, duration = await get_media_info(files, client)
+                language, resolution, subtitles, duration = get_media_info(files)
                 f_caption = CUSTOM_FILE_CAPTION.format(
                     file_name='' if title is None else title,
                     file_size='' if size is None else size,
@@ -479,7 +505,9 @@ async def cb_handler(client: Client, query: CallbackQuery):
         if f_caption is None:
             f_caption = f"{title}"
 
-
+        # checksub callbacks are already in a PM-safe flow.
+        # Send the cached media to the user after subscription is verified.
+        await query.answer()
         await client.send_cached_media(
             chat_id=query.from_user.id,
             file_id=file_id,
