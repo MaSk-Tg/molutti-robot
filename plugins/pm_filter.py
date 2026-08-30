@@ -4,6 +4,7 @@ import re
 import ast
 import math
 import random
+from difflib import SequenceMatcher
 from pyrogram.errors.exceptions.bad_request_400 import MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty
 from Script import script
 import pyrogram
@@ -47,7 +48,6 @@ def format_duration(duration):
         return str(duration)
 BUTTONS = {}
 SPELL_CHECK = {}
-NON_IMG ="""<b><i>👋Hello <a href=tg://settings >My Friend</a></i></b>\n\n<b>❝ <i>Use the Button Below to Search on Google or IMDB And Copy the Correct Movie Name And Paste.</i></b>\n\n<b>❝ <i>Don't Ask Movies that Are Not Released in OTT Platform.</i></b>\n\n<b>❝ <i>Try to Ask in [ Movie name, Year ] This Fromat.</i></b>\n\n<i><b><u>⚠️ Don't Use: ➲ [+:;'*!-&.. etc</i></b></u>"""
 
 
 @Client.on_message(filters.group & filters.text & filters.incoming)
@@ -790,18 +790,13 @@ async def auto_filter(client, msg, spoll=False):
         await msg.message.delete()
 
 async def advantage_spell_chok(msg):
-    """
-    Two different messages for failed movie searches.
+    """Show either the spelling-check or unreleased message."""
+    mv_rqst = (msg.text or "").strip()
+    search = mv_rqst.replace(" ", "+")
 
-    If IMDb identifies the requested movie and its release date is in the
-    future, show the unreleased message. Otherwise show the spelling-check
-    message.
-    """
-    mv_rqst = msg.text
-    search = msg.text.replace(" ", "+")
-
+    # Default message: the requested title could not be matched to a movie.
     spell_caption = (
-        "<b>നിങ്ങൾ നൽകിയ movie name കണ്ടെത്താനായില്ല.</b>\\n"
+        "<b>നിങ്ങൾ നൽകിയ movie name കണ്ടെത്താനായില്ല.</b>\n"
         "✍️ Spelling ഒന്ന് check ചെയ്ത് വീണ്ടും try ചെയ്യൂ."
     )
 
@@ -811,28 +806,62 @@ async def advantage_spell_chok(msg):
 
     caption = spell_caption
 
-    # The database only tells us that no file was found.
-    # Use the existing IMDb helper to detect a future release date.
     try:
-        imdb = await get_poster(mv_rqst)
+        imdb_data = await get_poster(mv_rqst)
 
-        if imdb:
-            release_date = str(imdb.get("release_date") or "").strip()
+        if imdb_data:
+            # Do not classify every IMDb search hit as the requested movie.
+            # This prevents random text such as "DC" from becoming an
+            # unreleased-movie message just because IMDb returned a result.
+            def normalize(value):
+                return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
 
-            from datetime import datetime, date
+            requested = normalize(re.sub(r"[1-2]\d{3}$", "", mv_rqst).strip())
+            candidates = [imdb_data.get("title"), imdb_data.get("localized_title")]
+            aka = imdb_data.get("aka")
+            if aka and aka != "N/A":
+                candidates.extend(str(aka).split(","))
 
-            release_dt = None
-            for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
-                try:
-                    release_dt = datetime.strptime(
-                        release_date, fmt
-                    ).date()
+            matched = False
+            for candidate in candidates:
+                candidate_norm = normalize(candidate)
+                if not candidate_norm or not requested:
+                    continue
+                if requested == candidate_norm:
+                    matched = True
                     break
-                except ValueError:
-                    pass
+                if len(requested) >= 4 and SequenceMatcher(
+                    None, requested, candidate_norm
+                ).ratio() >= 0.72:
+                    matched = True
+                    break
 
-            if release_dt and release_dt > date.today():
-                caption = unreleased_caption
+            if matched:
+                release_date = imdb_data.get("release_date")
+
+                # get_poster() normally returns an exact original-air/release
+                # date when IMDb has one. A future year is also supported.
+                from datetime import date
+                from datetime import datetime as dt_datetime
+
+                release_dt = None
+                if isinstance(release_date, date):
+                    release_dt = release_date
+                else:
+                    value = str(release_date or "").strip()
+                    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
+                        try:
+                            release_dt = dt_datetime.strptime(value, fmt).date()
+                            break
+                        except ValueError:
+                            pass
+                    if release_dt is None and re.fullmatch(r"[1-2]\d{3}", value):
+                        year = int(value)
+                        if year > date.today().year:
+                            release_dt = date(year, 1, 1)
+
+                if release_dt and release_dt > date.today():
+                    caption = unreleased_caption
 
     except Exception as e:
         logger.exception(e)
