@@ -220,7 +220,7 @@ async def start(client, message):
                         language=language,
                         resolution=resolution,
                         subtitles=subtitles,
-                        duration=duration
+                        duration=format_duration(duration)
                     )
                 except Exception as e:
                     logger.exception(e)
@@ -244,7 +244,7 @@ async def start(client, message):
                 language=language,
                 resolution=resolution,
                 subtitles=subtitles,
-                duration=duration
+                duration=format_duration(duration)
             )
         except Exception as e:
             logger.exception(e)
