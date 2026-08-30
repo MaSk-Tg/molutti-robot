@@ -790,8 +790,53 @@ async def auto_filter(client, msg, spoll=False):
         await msg.message.delete()
 
 async def advantage_spell_chok(msg):
+    """
+    Two different messages for failed movie searches.
+
+    If IMDb identifies the requested movie and its release date is in the
+    future, show the unreleased message. Otherwise show the spelling-check
+    message.
+    """
     mv_rqst = msg.text
     search = msg.text.replace(" ", "+")
+
+    spell_caption = (
+        "<b>നിങ്ങൾ നൽകിയ movie name കണ്ടെത്താനായില്ല.</b>\\n"
+        "✍️ Spelling ഒന്ന് check ചെയ്ത് വീണ്ടും try ചെയ്യൂ."
+    )
+
+    unreleased_caption = (
+        "<b>നിങ്ങൾ ചോദിച്ചാ സിനിമ ഇതുവരെ റിലീസ് ആയിട്ടില്ല.</b>"
+    )
+
+    caption = spell_caption
+
+    # The database only tells us that no file was found.
+    # Use the existing IMDb helper to detect a future release date.
+    try:
+        imdb = await get_poster(mv_rqst)
+
+        if imdb:
+            release_date = str(imdb.get("release_date") or "").strip()
+
+            from datetime import datetime, date
+
+            release_dt = None
+            for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
+                try:
+                    release_dt = datetime.strptime(
+                        release_date, fmt
+                    ).date()
+                    break
+                except ValueError:
+                    pass
+
+            if release_dt and release_dt > date.today():
+                caption = unreleased_caption
+
+    except Exception as e:
+        logger.exception(e)
+
     btn = [[
         InlineKeyboardButton(
             text="🔎 𝗚𝗼𝗼𝗴𝗹𝗲 🔍",
@@ -799,14 +844,15 @@ async def advantage_spell_chok(msg):
         ),
         InlineKeyboardButton(
             text="🔮 𝗜𝗠𝗗𝗕 🔮",
-            url=f"https://imdb.com/find?q={search}")
-
+            url=f"https://imdb.com/find?q={search}"
+        )
     ]]
-    spl = await msg.reply_photo(
-            photo="https://envs.sh/RCE.jpg", 
-            caption=NON_IMG.format(mv_rqst),
-            reply_markup=InlineKeyboardMarkup(btn)
+
+    spl = await msg.reply_text(
+        text=caption,
+        reply_markup=InlineKeyboardMarkup(btn)
     )
+
     await asyncio.sleep(99)
     await spl.delete()
     await msg.delete()
