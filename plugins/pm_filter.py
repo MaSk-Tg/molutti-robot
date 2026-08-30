@@ -790,34 +790,31 @@ async def auto_filter(client, msg, spoll=False):
         await msg.message.delete()
 
 async def advantage_spell_chok(msg):
-    """Show either the spelling-check or unreleased message."""
+    """Reply according to where the request came from and movie status.
+
+    1. Movie not found/added in our database -> database message.
+    2. In a group, if the requested title is a real movie but no file is
+       available yet, reply that the movie has not received its OTT release.
+    """
     mv_rqst = (msg.text or "").strip()
     search = mv_rqst.replace(" ", "+")
 
-    # Default message: the requested title could not be matched to a movie.
-    spell_caption = (
-        "<b>നിങ്ങൾ നൽകിയ movie name കണ്ടെത്താനായില്ല.</b>\n"
-        "✍️ Spelling ഒന്ന് check ചെയ്ത് വീണ്ടും try ചെയ്യൂ."
-    )
-
-    unreleased_caption = (
-        "<b>നിങ്ങൾ ചോദിച്ചാ സിനിമ ഇതുവരെ റിലീസ് ആയിട്ടില്ല.</b>"
-    )
-
-    caption = spell_caption
+    database_caption = "നിങ്ങൾ ചോദിച്ചാ movie ഞങ്ങളുടെ ഡാറ്റബാസിൽ add അകിട്ടില്ല"
+    ott_caption = "ഈ മൂവി ഇതുവരെ OTT release ആയിണ്ടില്ല"
+    caption = database_caption
 
     try:
         imdb_data = await get_poster(mv_rqst)
 
         if imdb_data:
-            # Do not classify every IMDb search hit as the requested movie.
-            # This prevents random text such as "DC" from becoming an
-            # unreleased-movie message just because IMDb returned a result.
             def normalize(value):
                 return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
 
             requested = normalize(re.sub(r"[1-2]\d{3}$", "", mv_rqst).strip())
-            candidates = [imdb_data.get("title"), imdb_data.get("localized_title")]
+            candidates = [
+                imdb_data.get("title"),
+                imdb_data.get("localized_title")
+            ]
             aka = imdb_data.get("aka")
             if aka and aka != "N/A":
                 candidates.extend(str(aka).split(","))
@@ -836,32 +833,15 @@ async def advantage_spell_chok(msg):
                     matched = True
                     break
 
-            if matched:
-                release_date = imdb_data.get("release_date")
+            # Only a real movie match in a group gets the OTT message.
+            chat_type = str(getattr(getattr(msg, "chat", None), "type", "")).lower()
+            is_group = "group" in chat_type or "supergroup" in chat_type
 
-                # get_poster() normally returns an exact original-air/release
-                # date when IMDb has one. A future year is also supported.
-                from datetime import date
-                from datetime import datetime as dt_datetime
-
-                release_dt = None
-                if isinstance(release_date, date):
-                    release_dt = release_date
-                else:
-                    value = str(release_date or "").strip()
-                    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
-                        try:
-                            release_dt = dt_datetime.strptime(value, fmt).date()
-                            break
-                        except ValueError:
-                            pass
-                    if release_dt is None and re.fullmatch(r"[1-2]\d{3}", value):
-                        year = int(value)
-                        if year > date.today().year:
-                            release_dt = date(year, 1, 1)
-
-                if release_dt and release_dt > date.today():
-                    caption = unreleased_caption
+            if matched and is_group:
+                # A movie that is already released (or whose release date is
+                # known) but has no file in our DB is treated as not yet added
+                # to our OTT collection.
+                caption = ott_caption
 
     except Exception as e:
         logger.exception(e)
@@ -877,14 +857,20 @@ async def advantage_spell_chok(msg):
         )
     ]]
 
-    spl = await msg.reply_text(
+    sent = await msg.reply_text(
         text=caption,
         reply_markup=InlineKeyboardMarkup(btn)
     )
 
     await asyncio.sleep(99)
-    await spl.delete()
-    await msg.delete()
+    try:
+        await sent.delete()
+    except Exception:
+        pass
+    try:
+        await msg.delete()
+    except Exception:
+        pass
     return
 
 async def manual_filters(client, message, text=False):
