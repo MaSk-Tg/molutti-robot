@@ -28,6 +28,23 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.ERROR)
 
 PM_BUTTONS = {}
+
+def format_duration(duration):
+    """Convert HH:MM:SS duration to compact format like 2h48m57s."""
+    try:
+        if duration is None:
+            return "Unknown"
+        parts = str(duration).strip().split(":")
+        if len(parts) != 3:
+            return str(duration)
+        h, m, s = (int(float(p)) for p in parts)
+        if h:
+            return f"{h}h{m}m{s}s"
+        if m:
+            return f"{m}m{s}s"
+        return f"{s}s"
+    except Exception:
+        return str(duration)
 BUTTONS = {}
 SPELL_CHECK = {}
 NON_IMG ="""<b><i>👋Hello <a href=tg://settings >My Friend</a></i></b>\n\n<b>❝ <i>Use the Button Below to Search on Google or IMDB And Copy the Correct Movie Name And Paste.</i></b>\n\n<b>❝ <i>Don't Ask Movies that Are Not Released in OTT Platform.</i></b>\n\n<b>❝ <i>Try to Ask in [ Movie name, Year ] This Fromat.</i></b>\n\n<i><b><u>⚠️ Don't Use: ➲ [+:;'*!-&.. etc</i></b></u>"""
@@ -386,7 +403,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
                     language=language,
                     resolution=resolution,
                     subtitles=subtitles,
-                    duration=duration
+                    duration=format_duration(duration)
                 )
             except Exception as e:
                 logger.exception(e)
@@ -401,11 +418,39 @@ async def cb_handler(client: Client, query: CallbackQuery):
                 )
                 return
             elif settings.get('botpm', False):
-                # Bot PM ON: open the bot's private chat with a deep-link.
-                # The file is delivered only after the user presses START.
-                await query.answer(
-                    url=f"https://t.me/{temp.U_NAME}?start={ident}_{file_id}"
-                )
+                # Bot PM mode: send the selected file directly to the user's PM.
+                # This avoids relying on the /start deep-link handler. If the user
+                # has not started the bot yet, fall back to the deep-link.
+                try:
+                    await client.send_cached_media(
+                        chat_id=query.from_user.id,
+                        file_id=file_id,
+                        caption=f_caption,
+                        protect_content=True if ident == "filep" else False,
+                        reply_markup=InlineKeyboardMarkup([
+                            [
+                                InlineKeyboardButton(
+                                    '💥 Gʀᴏᴜᴩ',
+                                    url="https://t.me/+iEbhY7mM4oE1OTVl"
+                                ),
+                                InlineKeyboardButton(
+                                    'Dᴇʟᴇᴛᴇ ⚠️',
+                                    callback_data='close_data'
+                                )
+                            ],
+                            [
+                                InlineKeyboardButton(
+                                    text=f'⚙️ Fɪʟᴇ Sɪᴢᴇ 【 {size} 】⚙️',
+                                    callback_data='gxneo'
+                                )
+                            ]
+                        ])
+                    )
+                    await query.answer('📩 File sent to your PM. Check private chat.', show_alert=True)
+                except (UserIsBlocked, PeerIdInvalid):
+                    await query.answer(
+                        url=f"https://t.me/{temp.U_NAME}?start={ident}_{file_id}"
+                    )
                 return
             else:
                 await client.send_cached_media(
@@ -469,7 +514,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
                     language=language,
                     resolution=resolution,
                     subtitles=subtitles,
-                    duration=duration
+                    duration=format_duration(duration)
                 )
             except Exception as e:
                 logger.exception(e)
