@@ -159,7 +159,7 @@ async def next_page(bot, query):
     await query.answer()
 
 
-@Client.on_callback_query(filters.regex(r"^spolling"))
+@Client.on_callback_query(filters.regex(r"^spol#"))
 async def advantage_spoll_choker(bot, query):
     _, user, movie_ = query.data.split('#')
     if int(user) != 0 and query.from_user.id != int(user):
@@ -178,7 +178,13 @@ async def advantage_spoll_choker(bot, query):
             k = (movie, files, offset, total_results)
             await auto_filter(bot, query, k)
         else:
-            k = await query.message.edit('movie not for my database..!')
+            is_group = query.message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]
+            text = (
+                "ഈ മൂവി ഇതുവരെ OTT release ആയിണ്ടില്ല"
+                if is_group
+                else "നിങ്ങൾ ചോദിച്ചാ movie ഞങ്ങളുടെ ഡാറ്റബാസിൽ add അകിട്ടില്ല"
+            )
+            k = await query.message.edit(text)
             await asyncio.sleep(10)
             await k.delete()
 
@@ -684,7 +690,7 @@ async def auto_filter(client, msg, spoll=False):
             files, offset, total_results = await get_search_results(search.lower(), offset=0, filter=True)
             if not files:
                 if settings["spell_check"]:
-                    return await advantage_spell_chok(msg)
+                    return await advantage_spell_chok(client, msg)
                 else:
                     return
         else:
@@ -789,89 +795,126 @@ async def auto_filter(client, msg, spoll=False):
     if spoll:
         await msg.message.delete()
 
-async def advantage_spell_chok(msg):
-    """Reply according to where the request came from and movie status.
-
-    1. Movie not found/added in our database -> database message.
-    2. In a group, if the requested title is a real movie but no file is
-       available yet, reply that the movie has not received its OTT release.
-    """
-    mv_rqst = (msg.text or "").strip()
-    search = mv_rqst.replace(" ", "+")
-
-    database_caption = "നിങ്ങൾ ചോദിച്ചാ movie ഞങ്ങളുടെ ഡാറ്റബാസിൽ add അകിട്ടില്ല"
-    ott_caption = "ഈ മൂവി ഇതുവരെ OTT release ആയിണ്ടില്ല"
-    caption = database_caption
+async def advantage_spell_chok(client, msg):
+    mv_id = msg.id
+    mv_rqst = msg.text
+    reqstr1 = msg.from_user.id if msg.from_user else 0
 
     try:
-        imdb_data = await get_poster(mv_rqst)
+        reqstr = await client.get_users(reqstr1)
+    except Exception:
+        reqstr = msg.from_user
 
-        if imdb_data:
-            def normalize(value):
-                return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+    settings = await get_settings(msg.chat.id)
 
-            requested = normalize(re.sub(r"[1-2]\d{3}$", "", mv_rqst).strip())
-            candidates = [
-                imdb_data.get("title"),
-                imdb_data.get("localized_title")
-            ]
-            aka = imdb_data.get("aka")
-            if aka and aka != "N/A":
-                candidates.extend(str(aka).split(","))
+    # Remove common request words before checking spelling.
+    query = re.sub(
+        r"\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e+)?)|"
+        r"((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|"
+        r"br((o|u)h?)*|^h(e|a)?(l)*(o)*|mal(ayalam)?|t(h)?amil|"
+        r"file|that|find|und(o)*|kit(t(i|y)?)?o(w)?|thar(u)?(o)*|"
+        r"kittum(o)*|aya(k)*(um(o)*)?|full\smovie|any(one)|"
+        r"with\ssubtitle(s)?)",
+        "", mv_rqst, flags=re.IGNORECASE
+    )
+    query = query.strip()
 
-            matched = False
-            for candidate in candidates:
-                candidate_norm = normalize(candidate)
-                if not candidate_norm or not requested:
-                    continue
-                if requested == candidate_norm:
-                    matched = True
-                    break
-                if len(requested) >= 4 and SequenceMatcher(
-                    None, requested, candidate_norm
-                ).ratio() >= 0.72:
-                    matched = True
-                    break
-
-            # Only a real movie match in a group gets the OTT message.
-            chat_type = str(getattr(getattr(msg, "chat", None), "type", "")).lower()
-            is_group = "group" in chat_type or "supergroup" in chat_type
-
-            if matched and is_group:
-                # A movie that is already released (or whose release date is
-                # known) but has no file in our DB is treated as not yet added
-                # to our OTT collection.
-                caption = ott_caption
-
+    try:
+        movies = await get_poster(mv_rqst, bulk=True)
     except Exception as e:
         logger.exception(e)
+        movies = []
 
-    btn = [[
-        InlineKeyboardButton(
-            text="🔎 𝗚𝗼𝗼𝗴𝗹𝗲 🔍",
-            url=f"https://google.com/search?q={search}"
-        ),
-        InlineKeyboardButton(
-            text="🔮 𝗜𝗠𝗗𝗕 🔮",
-            url=f"https://imdb.com/find?q={search}"
+    # No IMDb/movie match at all: this is not a spelling suggestion case.
+    if not movies:
+        if msg.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+            text = "ഈ മൂവി ഇതുവരെ OTT release ആയിണ്ടില്ല"
+        else:
+            text = "നിങ്ങൾ ചോദിച്ചാ movie ഞങ്ങളുടെ ഡാറ്റബാസിൽ add അകിട്ടില്ല"
+
+        k = await msg.reply_text(text)
+        try:
+            await asyncio.sleep(30)
+            await k.delete()
+        except Exception:
+            pass
+        return
+
+    movielist = []
+    for movie in movies:
+        title = movie.get("title")
+        year = movie.get("year")
+        if title:
+            movielist.append(title)
+            if year:
+                movielist.append(f"{title} {year}")
+
+    # If the requested name itself is a close/exact movie title, don't ask
+    # the user to choose a spelling suggestion.
+    def norm(value):
+        return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+    requested = norm(query or mv_rqst)
+    exact_match = False
+    for movie in movies:
+        title = norm(movie.get("title"))
+        if requested and title and (
+            requested == title or
+            (len(requested) >= 4 and SequenceMatcher(None, requested, title).ratio() >= 0.90)
+        ):
+            exact_match = True
+            break
+
+    is_group = msg.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]
+
+    if exact_match:
+        text = (
+            "ഈ മൂവി ഇതുവരെ OTT release ആയിണ്ടില്ല"
+            if is_group
+            else "നിങ്ങൾ ചോദിച്ചാ movie ഞങ്ങളുടെ ഡാറ്റബാസിൽ add അകിട്ടില്ല"
         )
-    ]]
+        k = await msg.reply_text(text)
+        try:
+            await asyncio.sleep(30)
+            await k.delete()
+        except Exception:
+            pass
+        return
 
-    sent = await msg.reply_text(
-        text=caption,
-        reply_markup=InlineKeyboardMarkup(btn)
+    # Spelling suggestion flow — same structure as the reference file.
+    SPELL_CHECK[mv_id] = movielist
+
+    btn = [
+        [
+            InlineKeyboardButton(
+                text=movie_name.strip(),
+                callback_data=f"spol#{reqstr1}#{k}",
+            )
+        ]
+        for k, movie_name in enumerate(movielist)
+    ]
+    btn.append([
+        InlineKeyboardButton(
+            text="Close",
+            callback_data=f"spol#{reqstr1}#close_spellcheck"
+        )
+    ])
+
+    spell_check_del = await msg.reply_text(
+        text="🔎 നിങ്ങൾ ഉദ്ദേശിച്ചത് ഇതാണോ?",
+        reply_markup=InlineKeyboardMarkup(btn),
+        reply_to_message_id=msg.id
     )
 
-    await asyncio.sleep(99)
     try:
-        await sent.delete()
+        if settings.get("auto_delete"):
+            await msg.delete()
+            await asyncio.sleep(600)
+            await spell_check_del.delete()
     except Exception:
         pass
-    try:
-        await msg.delete()
-    except Exception:
-        pass
-    return
+
+
 
 async def manual_filters(client, message, text=False):
     group_id = message.chat.id
