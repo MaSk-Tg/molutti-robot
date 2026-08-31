@@ -1,4 +1,4 @@
-#...welcome...
+##...welcome...
 import asyncio
 import re
 import ast
@@ -684,7 +684,7 @@ async def auto_filter(client, msg, spoll=False):
             files, offset, total_results = await get_search_results(search.lower(), offset=0, filter=True)
             if not files:
                 if settings["spell_check"]:
-                    return await advantage_spell_chok(client, msg)
+                    return await advantage_spell_chok(msg)
                 else:
                     return
         else:
@@ -790,149 +790,113 @@ async def auto_filter(client, msg, spoll=False):
         await msg.message.delete()
 
 async def advantage_spell_chok(client, msg):
-    # Full spelling-check flow: search IMDb for possible movie titles and
-    # show them as clickable suggestions. The selected title is then checked
-    # against the bot database by the spolling callback above.
-    mv_id = msg.id
+    """Group-only spelling/release fallback.
+
+    If the requested title cannot be matched, show the spelling message.
+    If IMDb identifies the exact title and its release date is in the future,
+    show the unreleased message.  PM requests are intentionally ignored here.
+    """
+    if msg.chat.type not in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+        return
+
     mv_rqst = (msg.text or "").strip()
-    reqstr1 = msg.from_user.id if msg.from_user else 0
-    try:
-        reqstr = await client.get_users(reqstr1) if reqstr1 else None
-    except Exception:
-        reqstr = None
+    search = mv_rqst.replace(" ", "+")
 
-    settings = await get_settings(msg.chat.id)
-
-    # Remove common request words before creating the movie-search phrase,
-    # matching the spelling-check behavior of the reference implementation.
-    query = re.sub(
-        r"\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e+)?)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|br((o|u)h?)*|^h(e|a)?(l)*(o)*|mal(ayalam)?|t(h)?amil|file|that|find|und(o)*|kit(t(i|y)?)?o(w)?|thar(u)?(o)*w?|kittum(o)*|aya(k)*(um(o)*)?|full\smovie|any(one)|with\ssubtitle(s)?)",
-        "", mv_rqst, flags=re.IGNORECASE
+    spell_caption = (
+        "<b>നിങ്ങൾ നൽകിയ movie name കണ്ടെത്താനായില്ല.</b>\n"
+        "✍️ Spelling ഒന്ന് check ചെയ്ത് വീണ്ടും try ചെയ്യൂ."
     )
-    query = query.strip()
+    unreleased_caption = (
+        "<b>നിങ്ങൾ ചോദിച്ചാ സിനിമ ഇതുവരെ റിലീസ് ആയിട്ടില്ല.</b>"
+    )
+
+    caption = spell_caption
 
     try:
-        movies = await get_poster(mv_rqst, bulk=True)
+        imdb_data = await get_poster(mv_rqst)
+
+        if imdb_data:
+            def normalize(value):
+                return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+            requested = normalize(re.sub(r"[1-2]\\d{3}$", "", mv_rqst).strip())
+            candidates = [
+                imdb_data.get("title"),
+                imdb_data.get("localized_title"),
+            ]
+            aka = imdb_data.get("aka")
+            if aka and aka != "N/A":
+                candidates.extend(str(aka).split(","))
+
+            matched = False
+            for candidate in candidates:
+                candidate_norm = normalize(candidate)
+                if not candidate_norm or not requested:
+                    continue
+                if requested == candidate_norm:
+                    matched = True
+                    break
+                if len(requested) >= 4 and SequenceMatcher(
+                    None, requested, candidate_norm
+                ).ratio() >= 0.72:
+                    matched = True
+                    break
+
+            if matched:
+                release_date = imdb_data.get("release_date")
+
+                from datetime import date, datetime as dt_datetime
+
+                release_dt = None
+                if isinstance(release_date, date):
+                    release_dt = release_date
+                else:
+                    value = str(release_date or "").strip()
+                    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
+                        try:
+                            release_dt = dt_datetime.strptime(value, fmt).date()
+                            break
+                        except ValueError:
+                            pass
+
+                    if release_dt is None and re.fullmatch(r"[1-2]\\d{3}", value):
+                        year = int(value)
+                        if year > date.today().year:
+                            release_dt = date(year, 1, 1)
+
+                if release_dt and release_dt > date.today():
+                    caption = unreleased_caption
+
     except Exception as e:
         logger.exception(e)
-        movies = None
 
-    # No IMDb suggestions: use the requested database-not-found message.
-    if not movies:
-        caption = (
-            "ഈ മൂവി ഇതുവരെ OTT release ആയിണ്ടില്ല"
-            if msg.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]
-            else "നിങ്ങൾ ചോദിച്ചാ movie ഞങ്ങളുടെ ഡാറ്റബാസിൽ add അകിട്ടില്ല"
-        )
-        await msg.reply_text(caption)
-        return
-
-    # Keep both title and title+year suggestions, like the reference file.
-    movielist = []
-    for movie in movies:
-        title = movie.get('title')
-        year = movie.get('year')
-        if title:
-            movielist.append(title)
-            if year:
-                movielist.append(f"{title} {year}")
-
-    if not movielist:
-        caption = (
-            "ഈ മൂവി ഇതുവരെ OTT release ആയിണ്ടില്ല"
-            if msg.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]
-            else "നിങ്ങൾ ചോദിച്ചാ movie ഞങ്ങളുടെ ഡാറ്റബാസിൽ add അകിട്ടില്ല"
-        )
-        await msg.reply_text(caption)
-        return
-
-    SPELL_CHECK[mv_id] = movielist
-
-    btn = [
-        [InlineKeyboardButton(
-            text=movie_name.strip(),
-            callback_data=f"spolling#{reqstr1}#{k}"
-        )]
-        for k, movie_name in enumerate(movielist)
-    ]
-    btn.append([
+    btn = [[
         InlineKeyboardButton(
-            text="Close",
-            callback_data=f"spolling#{reqstr1}#close_spellcheck"
+            text="🔎 𝗚𝗼𝗼𝗴𝗹𝗲 🔍",
+            url=f"https://google.com/search?q={search}"
+        ),
+        InlineKeyboardButton(
+            text="🔮 𝗜𝗠𝗗𝗕 🔮",
+            url=f"https://imdb.com/find?q={search}"
         )
-    ])
-
-    mention = reqstr.mention if reqstr else ""
-    caption = script.CUDNT_FND.format(mention)
+    ]]
 
     try:
-        spell_check_del = await msg.reply_photo(
-            photo=NOR_IMG,
-            caption=caption,
-            reply_markup=InlineKeyboardMarkup(btn),
-            reply_to_message_id=msg.id
-        )
-    except Exception:
-        # If the configured poster/image is invalid, still show the
-        # suggestion buttons as a normal text message.
-        spell_check_del = await msg.reply_text(
+        reply = await msg.reply_text(
             text=caption,
             reply_markup=InlineKeyboardMarkup(btn),
             reply_to_message_id=msg.id
         )
+    except Exception:
+        reply = await msg.reply_text(
+            text=caption,
+            reply_markup=InlineKeyboardMarkup(btn)
+        )
 
     try:
-        if settings.get('auto_delete'):
-            await msg.delete()
-            await asyncio.sleep(600)
-            await spell_check_del.delete()
+        await asyncio.sleep(99)
+        await reply.delete()
+        await msg.delete()
     except Exception:
         pass
 
-async def manual_filters(client, message, text=False):
-    group_id = message.chat.id
-    name = text or message.text
-    reply_id = message.reply_to_message.id if message.reply_to_message else message.id
-    keywords = await get_filters(group_id)
-    for keyword in reversed(sorted(keywords, key=len)):
-        pattern = r"( |^|[^\w])" + re.escape(keyword) + r"( |$|[^\w])"
-        if re.search(pattern, name, flags=re.IGNORECASE):
-            reply_text, btn, alert, fileid = await find_filter(group_id, keyword)
-
-            if reply_text:
-                reply_text = reply_text.replace("\\n", "\n").replace("\\t", "\t")
-
-            if btn is not None:
-                try:
-                    if fileid == "None":
-                        if btn == "[]":
-                            await client.send_message(group_id, reply_text, disable_web_page_preview=True)
-                        else:
-                            button = eval(btn)
-                            await client.send_message(
-                                group_id,
-                                reply_text,
-                                disable_web_page_preview=True,
-                                reply_markup=InlineKeyboardMarkup(button),
-                                reply_to_message_id=reply_id
-                            )
-                    elif btn == "[]":
-                        await client.send_cached_media(
-                            group_id,
-                            fileid,
-                            caption=reply_text or "",
-                            reply_to_message_id=reply_id
-                        )
-                    else:
-                        button = eval(btn)
-                        await message.reply_cached_media(
-                            fileid,
-                            caption=reply_text or "",
-                            reply_markup=InlineKeyboardMarkup(button),
-                            reply_to_message_id=reply_id
-                        )
-                except Exception as e:
-                    logger.exception(e)
-                break
-    else:
-        return False
