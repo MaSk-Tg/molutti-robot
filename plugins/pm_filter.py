@@ -159,7 +159,7 @@ async def next_page(bot, query):
     await query.answer()
 
 
-@Client.on_callback_query(filters.regex(r"^spol#"))
+@Client.on_callback_query(filters.regex(r"^spolling"))
 async def advantage_spoll_choker(bot, query):
     _, user, movie_ = query.data.split('#')
     if int(user) != 0 and query.from_user.id != int(user):
@@ -178,13 +178,7 @@ async def advantage_spoll_choker(bot, query):
             k = (movie, files, offset, total_results)
             await auto_filter(bot, query, k)
         else:
-            is_group = query.message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]
-            text = (
-                "ഈ മൂവി ഇതുവരെ OTT release ആയിണ്ടില്ല"
-                if is_group
-                else "നിങ്ങൾ ചോദിച്ചാ movie ഞങ്ങളുടെ ഡാറ്റബാസിൽ add അകിട്ടില്ല"
-            )
-            k = await query.message.edit(text)
+            k = await query.message.edit("ഈ മൂവി ഇതുവരെ OTT release ആയിണ്ടില്ല" if query.message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP] else "നിങ്ങൾ ചോദിച്ചാ movie ഞങ്ങളുടെ ഡാറ്റബാസിൽ add അകിട്ടില്ല")
             await asyncio.sleep(10)
             await k.delete()
 
@@ -796,25 +790,23 @@ async def auto_filter(client, msg, spoll=False):
         await msg.message.delete()
 
 async def advantage_spell_chok(client, msg):
+    # Full spelling-check flow: search IMDb for possible movie titles and
+    # show them as clickable suggestions. The selected title is then checked
+    # against the bot database by the spolling callback above.
     mv_id = msg.id
-    mv_rqst = msg.text
+    mv_rqst = (msg.text or "").strip()
     reqstr1 = msg.from_user.id if msg.from_user else 0
-
     try:
-        reqstr = await client.get_users(reqstr1)
+        reqstr = await client.get_users(reqstr1) if reqstr1 else None
     except Exception:
-        reqstr = msg.from_user
+        reqstr = None
 
     settings = await get_settings(msg.chat.id)
 
-    # Remove common request words before checking spelling.
+    # Remove common request words before creating the movie-search phrase,
+    # matching the spelling-check behavior of the reference implementation.
     query = re.sub(
-        r"\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e+)?)|"
-        r"((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|"
-        r"br((o|u)h?)*|^h(e|a)?(l)*(o)*|mal(ayalam)?|t(h)?amil|"
-        r"file|that|find|und(o)*|kit(t(i|y)?)?o(w)?|thar(u)?(o)*|"
-        r"kittum(o)*|aya(k)*(um(o)*)?|full\smovie|any(one)|"
-        r"with\ssubtitle(s)?)",
+        r"\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e+)?)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|br((o|u)h?)*|^h(e|a)?(l)*(o)*|mal(ayalam)?|t(h)?amil|file|that|find|und(o)*|kit(t(i|y)?)?o(w)?|thar(u)?(o)*w?|kittum(o)*|aya(k)*(um(o)*)?|full\smovie|any(one)|with\ssubtitle(s)?)",
         "", mv_rqst, flags=re.IGNORECASE
     )
     query = query.strip()
@@ -823,98 +815,79 @@ async def advantage_spell_chok(client, msg):
         movies = await get_poster(mv_rqst, bulk=True)
     except Exception as e:
         logger.exception(e)
-        movies = []
+        movies = None
 
-    # No IMDb/movie match at all: this is not a spelling suggestion case.
+    # No IMDb suggestions: use the requested database-not-found message.
     if not movies:
-        if msg.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
-            text = "ഈ മൂവി ഇതുവരെ OTT release ആയിണ്ടില്ല"
-        else:
-            text = "നിങ്ങൾ ചോദിച്ചാ movie ഞങ്ങളുടെ ഡാറ്റബാസിൽ add അകിട്ടില്ല"
-
-        k = await msg.reply_text(text)
-        try:
-            await asyncio.sleep(30)
-            await k.delete()
-        except Exception:
-            pass
+        caption = (
+            "ഈ മൂവി ഇതുവരെ OTT release ആയിണ്ടില്ല"
+            if msg.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]
+            else "നിങ്ങൾ ചോദിച്ചാ movie ഞങ്ങളുടെ ഡാറ്റബാസിൽ add അകിട്ടില്ല"
+        )
+        await msg.reply_text(caption)
         return
 
+    # Keep both title and title+year suggestions, like the reference file.
     movielist = []
     for movie in movies:
-        title = movie.get("title")
-        year = movie.get("year")
+        title = movie.get('title')
+        year = movie.get('year')
         if title:
             movielist.append(title)
             if year:
                 movielist.append(f"{title} {year}")
 
-    # If the requested name itself is a close/exact movie title, don't ask
-    # the user to choose a spelling suggestion.
-    def norm(value):
-        return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
-
-    requested = norm(query or mv_rqst)
-    exact_match = False
-    for movie in movies:
-        title = norm(movie.get("title"))
-        if requested and title and (
-            requested == title or
-            (len(requested) >= 4 and SequenceMatcher(None, requested, title).ratio() >= 0.90)
-        ):
-            exact_match = True
-            break
-
-    is_group = msg.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]
-
-    if exact_match:
-        text = (
+    if not movielist:
+        caption = (
             "ഈ മൂവി ഇതുവരെ OTT release ആയിണ്ടില്ല"
-            if is_group
+            if msg.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]
             else "നിങ്ങൾ ചോദിച്ചാ movie ഞങ്ങളുടെ ഡാറ്റബാസിൽ add അകിട്ടില്ല"
         )
-        k = await msg.reply_text(text)
-        try:
-            await asyncio.sleep(30)
-            await k.delete()
-        except Exception:
-            pass
+        await msg.reply_text(caption)
         return
 
-    # Spelling suggestion flow — same structure as the reference file.
     SPELL_CHECK[mv_id] = movielist
 
     btn = [
-        [
-            InlineKeyboardButton(
-                text=movie_name.strip(),
-                callback_data=f"spol#{reqstr1}#{k}",
-            )
-        ]
+        [InlineKeyboardButton(
+            text=movie_name.strip(),
+            callback_data=f"spolling#{reqstr1}#{k}"
+        )]
         for k, movie_name in enumerate(movielist)
     ]
     btn.append([
         InlineKeyboardButton(
             text="Close",
-            callback_data=f"spol#{reqstr1}#close_spellcheck"
+            callback_data=f"spolling#{reqstr1}#close_spellcheck"
         )
     ])
 
-    spell_check_del = await msg.reply_text(
-        text="🔎 നിങ്ങൾ ഉദ്ദേശിച്ചത് ഇതാണോ?",
-        reply_markup=InlineKeyboardMarkup(btn),
-        reply_to_message_id=msg.id
-    )
+    mention = reqstr.mention if reqstr else ""
+    caption = script.CUDNT_FND.format(mention)
 
     try:
-        if settings.get("auto_delete"):
+        spell_check_del = await msg.reply_photo(
+            photo=NOR_IMG,
+            caption=caption,
+            reply_markup=InlineKeyboardMarkup(btn),
+            reply_to_message_id=msg.id
+        )
+    except Exception:
+        # If the configured poster/image is invalid, still show the
+        # suggestion buttons as a normal text message.
+        spell_check_del = await msg.reply_text(
+            text=caption,
+            reply_markup=InlineKeyboardMarkup(btn),
+            reply_to_message_id=msg.id
+        )
+
+    try:
+        if settings.get('auto_delete'):
             await msg.delete()
             await asyncio.sleep(600)
             await spell_check_del.delete()
     except Exception:
         pass
-
-
 
 async def manual_filters(client, message, text=False):
     group_id = message.chat.id
